@@ -56,6 +56,13 @@ exports.register = async (req, res) => {
 
 exports.login = async (req, res) => {
   const {email, password} = req.body;
+
+  // Simple email validation regex
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({ message: 'Invalid email format' });
+  }
+
   try {
     const user = await User.findOne({ email: email });
 
