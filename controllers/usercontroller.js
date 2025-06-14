@@ -96,34 +96,37 @@ exports.login = async (req, res) => {
 
 exports.verifyEmail = async (req, res) => {
   const { token } = req.query;
+  // Ensure FRONTEND_URL is set in your .env file, e.g., FRONTEND_URL=http://localhost:3000
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000/verification-status'; // Default or a specific page
+
   if (!token) {
-    return res.status(400).json({ message: 'Verification token is required.' });
+    // Redirect to a frontend page indicating an error
+    return res.redirect(`${frontendUrl}?success=false&message=token_required`);
   }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const emailToVerify = decoded.email;
-
     const userToVerify = await User.findOne({ email: emailToVerify });
 
     if (!userToVerify) {
-      return res.status(404).json({ message: 'User not found for this verification token.' });
+      return res.redirect(`${frontendUrl}?success=false&message=user_not_found`);
     }
 
     if (userToVerify.verified) {
-      // Optionally, you can just inform them it's already verified and let them proceed
-      return res.send('Email already verified. You can now log in.');
+      return res.redirect(`${frontendUrl}?success=true&message=already_verified`);
     }
 
     userToVerify.verified = true;
     await userToVerify.save(); // Save the updated user status to MongoDB
 
-    res.send('Email verified successfully');
+    return res.redirect(`${frontendUrl}?success=true&message=verification_successful`);
   } catch (err) {
-    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-      return res.status(400).json({ message: 'Invalid or expired token.' });
-    }
     console.error('Error during email verification:', err);
-    return res.status(500).json({ message: 'Error verifying email.' });
+    let errorMessage = 'verification_failed';
+    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+      errorMessage = 'invalid_or_expired_token';
+    }
+    return res.redirect(`${frontendUrl}?success=false&message=${errorMessage}`);
   }
 };
