@@ -1,6 +1,5 @@
 const bcrypt = require('bcrypt');
 const sendEmail = require('../utils/sendEmail.js');
-const jwt = require('jsonwebtoken');
 
 const User = require('../models/userModel.js'); // Changed from Users to User (conventional)
 
@@ -23,16 +22,18 @@ exports.register = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const verificationCode = Math.floor(10000000 + Math.random() * 90000000).toString(); // 8-digit code
+    const verificationCodeExpires = Date.now() + 3600000; // Code expires in 1 hour
+
     const newUser = new User({ // Use the User model
       email,
       password: hashedPassword,
-      verified: false
+      verified: false,
+      verificationCode,
+      verificationCodeExpires
     });
     await newUser.save(); // Save to MongoDB
-
-    const verificationToken = jwt.sign({ email: newUser.email }, process.env.JWT_SECRET, { expiresIn: '1d' });
-    const verifyUrl = `http://localhost:5000/api/auth/verify-email?token=${verificationToken}`; // Corrected query parameter
-    const html = `<p>Please confirm your email by clicking the link below:</p><a href="${verifyUrl}">${verifyUrl}</a>`;
+    const html = `<p>Your email verification code is: <strong>${verificationCode}</strong></p><p>This code will expire in 1 hour.</p>`;
     await sendEmail(newUser.email, 'Confirm Your Email Address', html);
 
     return res.status(201).json({
@@ -82,51 +83,49 @@ exports.login = async (req, res) => {
       });
     }
 
-    const token = jwt.sign({ email: user.email, id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    // Assuming you still want JWT for session management after login
+    const jwt = require('jsonwebtoken'); // Require JWT here if only used for login token
+    const loginToken = jwt.sign({ email: user.email, id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
     res.status(200).json({
       message: 'Login successful',
-      token
+      token: loginToken
     });
   } catch (error) {
     console.error("Error during login:", error);
     return res.status(500).json({ message: 'Server error during login.' });
   }
 };
+exports.verifyOtp = async (req, res) => {
+  const { email, otp } = req.body;
 
-exports.verifyEmail = async (req, res) => {
-  const { token } = req.query;
-  // Ensure FRONTEND_URL is set in your .env file, e.g., FRONTEND_URL=http://localhost:3000
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000/verification-status'; // Default or a specific page
-
-  if (!token) {
-    // Redirect to a frontend page indicating an error
-    return res.redirect(`${frontendUrl}?success=false&message=token_required`);
+  if (!email || !otp) {
+    return res.status(400).json({ message: 'Email and OTP are required.' });
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const emailToVerify = decoded.email;
-    const userToVerify = await User.findOne({ email: emailToVerify });
+    const user = await User.findOne({ email });
 
-    if (!userToVerify) {
-      return res.redirect(`${frontendUrl}?success=false&message=user_not_found`);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
     }
 
-    if (userToVerify.verified) {
-      return res.redirect(`${frontendUrl}?success=true&message=already_verified`);
+    if (user.verified) {
+      return res.status(400).json({ message: 'Account already verified.' });
     }
 
-    userToVerify.verified = true;
-    await userToVerify.save(); // Save the updated user status to MongoDB
+    if (user.verificationCode !== otp || user.verificationCodeExpires < Date.now()) {
+      return res.status(400).json({ message: 'Invalid or expired OTP.' });
+    }
 
-    return res.redirect(`${frontendUrl}?success=true&message=verification_successful`);
+    user.verified = true;
+    user.verificationCode = undefined; // Clear OTP after use
+    user.verificationCodeExpires = undefined; // Clear OTP expiry
+    await user.save();
+
+    return res.status(200).json({ message: 'Email verified successfully.' });
   } catch (err) {
-    console.error('Error during email verification:', err);
-    let errorMessage = 'verification_failed';
-    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-      errorMessage = 'invalid_or_expired_token';
-    }
-    return res.redirect(`${frontendUrl}?success=false&message=${errorMessage}`);
+    console.error('Error during OTP verification:', err);
+    return res.status(500).json({ message: 'Server error during OTP verification.' });
   }
 };
